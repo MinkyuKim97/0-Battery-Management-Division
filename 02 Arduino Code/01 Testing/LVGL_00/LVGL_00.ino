@@ -2,6 +2,13 @@
 #include <Arduino_GFX_Library.h>
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
+#include <WiFi.h>
+
+//Managing personal infos
+#include "secrets.h"
+
+// const char* WIFI_SSID = "YOUR_SSID";
+// const char* WIFI_PASS = "YOUR_PASSWORD";
 
 // ===== LCDWiki 핀(ESP32-32E 3.5" 보드) =====
 #define TFT_CS   15
@@ -76,6 +83,9 @@ bool pointInRect(int16_t x, int16_t y, const Rect &r) {
   return (x >= r.x) && (x < (r.x + r.w)) && (y >= r.y) && (y < (r.y + r.h));
 }
 
+
+
+
 void computeLayout() {
   int16_t W = gfx->width();
   int16_t H = gfx->height();
@@ -93,27 +103,11 @@ void drawBoxWithChrome(uint16_t fillColor) {
   gfx->drawRect(touchBox.x + 1, touchBox.y + 1, touchBox.w - 2, touchBox.h - 2, border);
 }
 
-// void drawCenteredText(uint16_t textColor) {
-//   int16_t W = gfx->width();
-//   int16_t H = gfx->height();
-
-//   // 기본 5x7 폰트 가정: 문자폭 6, 문자높이 8
-//   int16_t textW = (int16_t)(strlen(MSG) * 6 * textSize);
-//   int16_t textH = (int16_t)(8 * textSize);
-//   int16_t tx = (W - textW) / 2;
-//   int16_t ty = (H - textH) / 2;
-
-//   gfx->setFont(u8g2_font_maniac_tr);
-//   gfx->setTextSize(textSize);
-//   gfx->setTextColor(textColor, COLOR_BLACK);
-//   gfx->setCursor(tx, ty);
-//   gfx->print(MSG);
-// }
-
 void drawCenteredText(uint16_t textColor) {
-  gfx->setTextColor(textColor, COLOR_BLACK);
+  // gfx->setTextColor(textColor, COLOR_BLACK);
+  gfx->setTextColor(textColor);
 
-  gfx->setFont(u8g2_font_ncenB14_tr);   // <- 여기 원하는 폰트로 교체
+  gfx->setFont(u8g2_font_helvB14_te);
   // gfx->setUTF8Print(true);           // UTF-8 쓰면 켜기
 
   int16_t x1, y1;
@@ -142,18 +136,7 @@ void renderNormal() {
   drawCenteredText(textColor);
 }
 
-void pulseAnimation() {
-  // 간단한 눌림 펄스(3프레임)
-  Rect r0 = touchBox;
-  for (int i = 0; i < 3; i++) {
-    int shrink = (i == 1) ? 8 : 0;
-    touchBox = { (int16_t)(r0.x + shrink), (int16_t)(r0.y + shrink),
-                 (int16_t)(r0.w - 2*shrink), (int16_t)(r0.h - 2*shrink) };
-    renderNormal();
-    delay(30);
-  }
-  touchBox = r0;
-}
+
 
 bool mapTouchToScreen(const TS_Point &p, int16_t &sx, int16_t &sy) {
   int16_t rx = p.x;
@@ -184,11 +167,74 @@ void printTouchDebug(const TS_Point &p, int16_t sx, int16_t sy, bool inBox) {
                 p.x, p.y, sx, sy, inBox ? 1 : 0,
                 obsMinX, obsMaxX, obsMinY, obsMaxY);
 }
+// void connectWiFi() {
+//   WiFi.mode(WIFI_STA);
+//   WiFi.setSleep(false);
+//   WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+//   Serial.print("WiFi connecting");
+//   int tries = 0;
+//   while (WiFi.status() != WL_CONNECTED && tries < 60) {
+//     delay(500);
+//     Serial.print(".");
+//     tries++;
+//   }
+//   Serial.println();
+
+//   if (WiFi.status() == WL_CONNECTED) {
+//     Serial.print("WiFi connected! IP: ");
+//     Serial.println(WiFi.localIP());
+//   } else {
+//     Serial.println("WiFi connect FAILED");
+//   }
+// }
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+}
+
+String wifiLine() {
+  wl_status_t st = WiFi.status();
+  if (st == WL_CONNECTED) {
+    return "WiFi:OK " + WiFi.localIP().toString() + " RSSI:" + String(WiFi.RSSI());
+  }
+  if (st == WL_IDLE_STATUS) return "WiFi:IDLE";
+  if (st == WL_NO_SSID_AVAIL) return "WiFi:NO_SSID";
+  if (st == WL_CONNECT_FAILED) return "WiFi:FAIL";
+  if (st == WL_DISCONNECTED) return "WiFi:DISC";
+  return "WiFi:UNK";
+}
+
+void drawWifiStatusBar(bool force = false) {
+  static String last = "";
+  static uint32_t lastMs = 0;
+
+  // 너무 자주 갱신하지 않기(깜빡임 방지)
+  if (!force && (millis() - lastMs) < 500) return;
+  lastMs = millis();
+
+  String s = wifiLine();
+  if (!force && s == last) return;
+  last = s;
+
+  // 상단 바 영역만 지우고 다시 그리기
+  const int barH = 24;
+  gfx->fillRect(0, 0, gfx->width(), barH, COLOR_BLACK);
+
+  // 폰트(원하면 U8g2 폰트 사용 가능)
+  gfx->setFont(u8g2_font_6x10_tr);   // 작고 가독성 좋음
+  gfx->setTextSize(1);
+  gfx->setTextColor(COLOR_WHITE);    // 배경 투명 (이미 bar를 검정으로 지웠음)
+  gfx->setCursor(4, 16);             // y는 폰트 baseline 느낌이라 16 정도가 무난
+  gfx->print(s);
+
+  gfx->setFont(); // (선택) 기본 폰트로 복귀
+}
 
 void setup() {
   Serial.begin(115200);
   delay(200);
-
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH); // 백라이트 ON
 
@@ -200,12 +246,23 @@ void setup() {
   // ts.setRotation(0); // 여기서는 우리 코드에서 mapping 처리하므로 기본 0으로 두는 게 안전
 
   renderNormal();
+  connectWiFi();
+  drawWifiStatusBar(true);  // 처음 1회 강제 출력
 
   Serial.println("Ready. Touch the CENTER box to toggle. Watch RAW/SCREEN coords for calibration.");
 }
 
 void loop() {
-  bool touched = ts.touched();
+drawWifiStatusBar(); // 주기적으로 상태 표시 업데이트
+
+if (WiFi.status() != WL_CONNECTED) {
+  static uint32_t lastTry = 0;
+  if (millis() - lastTry > 3000) {   // 3초마다 재시도
+    lastTry = millis();
+    connectWiFi();
+    drawWifiStatusBar(true);
+  }
+}  bool touched = ts.touched();
 
   if (touched && !lastTouched && (millis() - lastToggleMs) > debounceMs) {
     TS_Point p = ts.getPoint();
@@ -218,8 +275,8 @@ void loop() {
 
     if (inBox) {
       toggled = !toggled;   // ✅ 토글
-      // pulseAnimation();     // ✅ 애니메이션
       renderNormal();       // ✅ 최종 렌더
+      drawWifiStatusBar(true);
     }
 
     lastToggleMs = millis();
