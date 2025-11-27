@@ -92,6 +92,7 @@ struct MemberInfo {
   bool canFinancial = false;
 
   int tendency = 0;          // 0~10
+  int32_t replacedDateInt = 0;
   bool loaded = false;
 };
 MemberInfo currentMember;
@@ -113,7 +114,7 @@ bool pointInRect(int16_t x, int16_t y, const Rect &r) {
   return (x >= r.x) && (x < (r.x + r.w)) && (y >= r.y) && (y < (r.y + r.h));
 }
 
-String birthIntToPretty(int32_t yyyymmdd) {
+String dateIntToPretty(int32_t yyyymmdd) {
   if (yyyymmdd <= 0) return "";
   int32_t y = yyyymmdd / 10000;
   int32_t m = (yyyymmdd / 100) % 100;
@@ -123,7 +124,7 @@ String birthIntToPretty(int32_t yyyymmdd) {
   return String(buf);
 }
 
-int32_t birthStrToInt(const String &s) {
+int32_t dateStrToInt(const String &s) {
   String digits;
   digits.reserve(8);
   for (size_t i = 0; i < s.length(); i++) {
@@ -132,6 +133,12 @@ int32_t birthStrToInt(const String &s) {
   }
   if (digits.length() < 8) return 0;
   return (int32_t)digits.substring(0, 8).toInt(); // YYYYMMDD
+}
+
+
+void sendToUnoCmd(const char* cmd) {
+  Serial.print("@CMD:");
+  Serial.println(cmd);
 }
 
 // WiFi 
@@ -151,7 +158,9 @@ void connectWiFi() {
 String wifiLine() {
   wl_status_t st = WiFi.status();
   if (st == WL_CONNECTED) {
-    return "WiFi:OK " + WiFi.localIP().toString() + " RSSI:" + String(WiFi.RSSI());
+    return "WiFi:OK " 
+    // + WiFi.localIP().toString()
+    //  + " RSSI:" + String(WiFi.RSSI());
   }
   if (st == WL_IDLE_STATUS) return "WiFi:IDLE";
   if (st == WL_NO_SSID_AVAIL) return "WiFi:NO_SSID";
@@ -342,7 +351,8 @@ String buildMemberDocBody(
   bool hasVisa,
   const char* visaType,
   bool canFinancialTransactions,
-  int tendency0to10
+  int tendency0to10,
+  int32_t replacedDateYYYYMMDD
 ) {
   StaticJsonDocument<1024> root;
   JsonObject fields = root.createNestedObject("fields");
@@ -361,16 +371,17 @@ String buildMemberDocBody(
 
   tendency0to10 = clampInt(tendency0to10, 0, 10);
   fields["tendency"]["integerValue"] = String(tendency0to10);
-
+  fields["replacedDate"]["integerValue"] = String(replacedDateYYYYMMDD);
+ 
   String out;
   serializeJson(root, out);
   return out;
 }
 
 void seedMembersOnce() {
-  String bodyM1 = buildMemberDocBody("Minkyu Kim", 19971025, "South Korea", true,  "F-1",  true,  9);
-  String bodyM2 = buildMemberDocBody("Max Hahn",     20000315, "USA",     false, "none", false, 5);
-  String bodyM3 = buildMemberDocBody("Augie Fesh", 19940623, "Canada",     true,  "H-1B", true,  2);
+  String bodyM1 = buildMemberDocBody("Minkyu Kim", 19971025, "South Korea", true,  "F-1",  true,  9, 20251126);
+  String bodyM2 = buildMemberDocBody("Max Hahn",     20000315, "USA",     false, "none", false, 5, 20210512);
+  String bodyM3 = buildMemberDocBody("Augie Fesh", 19940623, "Canada",     true,  "H-1B", true,  2, 19970823);
 
   if (!firestoreCreateDocument("members", "m1", bodyM1)) firestorePatchDocument("members/m1", bodyM1);
   if (!firestoreCreateDocument("members", "m2", bodyM2)) firestorePatchDocument("members/m2", bodyM2);
@@ -401,7 +412,7 @@ bool parseMemberFromFirestore(const String &resp, MemberInfo &out) {
       out.birthDateInt = (int32_t)v.toInt();
     } else {
       String s = fields["birthDate"]["stringValue"] | fields["birthDate"]["timestampValue"] | "";
-      out.birthDateInt = birthStrToInt(s);
+      out.birthDateInt = dateStrToInt(s);
     }
   }
 
@@ -430,6 +441,17 @@ bool parseMemberFromFirestore(const String &resp, MemberInfo &out) {
     }
   }
 
+  out.replacedDateInt = 0;
+  if (!fields["replacedDate"].isNull()) {
+    if (!fields["replacedDate"]["integerValue"].isNull()) {
+      String v = fields["replacedDate"]["integerValue"].as<String>();
+      out.replacedDateInt = (int32_t)v.toInt();
+    } else {
+      String s = fields["replacedDate"]["stringValue"] | fields["replacedDate"]["timestampValue"] | "";
+      out.replacedDateInt = dateStrToInt(s);
+    }
+  }
+
   out.loaded = true;
   return true;
 }
@@ -454,44 +476,51 @@ void drawMemberInfo(const MemberInfo &m) {
   int16_t y = touchBox.y + pad;
 
   gfx->setFont(u8g2_font_6x10_tr);
-  gfx->setTextSize(1);
+
+  int size = 2;
+  gfx->setTextSize(size);
   gfx->setTextColor(COLOR_WHITE);
 
   if (!m.loaded) {
-    gfx->setCursor(x, y + 12);
+    gfx->setCursor(x, y + 12*size);
     gfx->print("Loading...");
     gfx->setFont();
     return;
   }
 
-  gfx->setCursor(x, y + 12);
+  gfx->setCursor(x, y + 12*size);
   gfx->print(m.docPath);
 
-  gfx->setCursor(x, y + 30);
+  gfx->setCursor(x, y + 30*size);
   gfx->print("Name: "); gfx->print(m.name);
 
-  gfx->setCursor(x, y + 46);
+  gfx->setCursor(x, y + 46*size);
   gfx->print("Country: "); gfx->print(m.country);
 
-  gfx->setCursor(x, y + 62);
+  gfx->setCursor(x, y + 62*size);
   gfx->print("Birth: ");
-  if (m.birthDateInt > 0) gfx->print(birthIntToPretty(m.birthDateInt));
+  if (m.birthDateInt > 0) gfx->print(dateIntToPretty(m.birthDateInt));
   else gfx->print("-");
 
-  gfx->setCursor(x, y + 78);
+  gfx->setCursor(x, y + 78*size);
   gfx->print("Visa: ");
   gfx->print(m.hasVisa ? "YES" : "NO");
   if (m.hasVisa && m.visaType.length()) {
     gfx->print(" ("); gfx->print(m.visaType); gfx->print(")");
   }
 
-  gfx->setCursor(x, y + 94);
+  gfx->setCursor(x, y + 94*size);
   gfx->print("Finance: "); gfx->print(m.canFinancial ? "YES" : "NO");
 
-  gfx->setCursor(x, y + 110);
+  gfx->setCursor(x, y + 110*size);
   gfx->print("Tendency: ");
   gfx->print(m.tendency);
   gfx->print("/10");
+
+  gfx->setCursor(x, y + 126*size);
+  gfx->print("Last Replaced Date: ");
+  if (m.replacedDateInt > 0) gfx->print(dateIntToPretty(m.replacedDateInt));
+  else gfx->print("-");
 
   gfx->setFont();
 }
@@ -561,6 +590,7 @@ void nextMember() {
 
 void setup() {
   Serial.begin(115200);
+  // Serial.begin(9600);
   delay(200);
 
   pinMode(TFT_BL, OUTPUT);
@@ -602,7 +632,7 @@ void setup() {
         prefs.putBool("seeded", true);
         Serial.println("[SEED] done (or repaired)");
       } else {
-        // seedMembersOnce();
+        seedMembersOnce();
         Serial.println("[SEED] already");
       }
       prefs.end();
@@ -642,6 +672,7 @@ void loop() {
     nextMember();
 
     lastTouchMs = millis();
+    sendToUnoCmd("DO_ACTION");
   }
 
   lastTouched = touched;
